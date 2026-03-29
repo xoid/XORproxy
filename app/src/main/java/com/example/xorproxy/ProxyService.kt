@@ -6,14 +6,16 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.BitmapFactory
-import android.graphics.Color
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import androidx.core.app.NotificationCompat
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
+import java.security.MessageDigest
 import java.util.concurrent.Executors
 
 class ProxyService : Service() {
@@ -36,32 +38,36 @@ class ProxyService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // Остановка по кнопке из уведомления
         if (intent?.action == ACTION_STOP) {
             stopSelf()
             return START_NOT_STICKY
         }
 
-        if (isRunning) {
-            return START_STICKY
-        }
+        if (isRunning) return START_STICKY
+
+        // Сразу показываем уведомление (обязательно для foreground service)
+        startForegroundNotification()
 
         isRunning = true
-        startForeground(NOTIFICATION_ID, createNotification())
 
-        val localPort = prefs.getString("local_port", "1080")!!.toInt()
+        val localPort = prefs.getString("local_port", "1080")!!.toIntOrNull() ?: 1080
         val remoteHost = prefs.getString("remote_host", "")!!
-        val remotePort = prefs.getString("remote_port", "9999")!!.toInt()
+        val remotePort = prefs.getString("remote_port", "9999")!!.toIntOrNull() ?: 9999
         val passphrase = prefs.getString("passphrase", "")!!
 
-        // Ключ для XOR (SHA-256 от фразы — надёжнее чем просто строка)
-        val key = java.security.MessageDigest.getInstance("SHA-256")
+        if (remoteHost.isEmpty() || passphrase.length < 8) {
+            Log.e(TAG, "Неверные настройки")
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        val key = MessageDigest.getInstance("SHA-256")
             .digest(passphrase.toByteArray(Charsets.UTF_8))
 
         Thread {
             try {
                 serverSocket = ServerSocket(localPort, 50, InetAddress.getByName("127.0.0.1"))
-                Log.i(TAG, "TCP Proxy запущен на 127.0.0.1:$localPort")
+                Log.i(TAG, "✅ TCP Proxy запущен и слушает 127.0.0.1:$localPort")
 
                 while (isRunning) {
                     val clientSocket = serverSocket!!.accept()
@@ -70,51 +76,59 @@ class ProxyService : Service() {
                     }
                 }
             } catch (e: Exception) {
-                if (isRunning) {
-                    Log.e(TAG, "Ошибка сервера", e)
-                }
+                if (isRunning) Log.e(TAG, "Ошибка ServerSocket", e)
             }
         }.start()
 
         return START_STICKY
     }
 
+    private fun startForegroundNotification() {
+        val notification = createNotification()
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
+    }
+
     private fun handleClient(client: Socket, remoteHost: String, remotePort: Int, key: ByteArray) {
         var remote: Socket? = null
         try {
             remote = Socket(remoteHost, remotePort)
-            Log.i(TAG, "Новое соединение: ${client.inetAddress} → $remoteHost:$remotePort")
+            Log.i(TAG, "Новое соединение → $remoteHost:$remotePort")
 
-            // Поток 1: Telegram → Remote (шифруем XOR)
+            // Telegram → Remote (шифруем)
             Thread {
+                val buffer = ByteArray(16384)
                 try {
-                    val buffer = ByteArray(16384)
-                    var bytesRead: Int
                     val input = client.getInputStream()
-                    val output = remote!!.getOutputStream()
-
-                    while (isRunning && (bytesRead = input.read(buffer)) != -1) {
+                    val output = remote.getOutputStream()
+                    while (isRunning) {
+                        val bytesRead = input.read(buffer)
+                        if (bytesRead == -1) break
                         xorInPlace(buffer, bytesRead, key)
                         output.write(buffer, 0, bytesRead)
                         output.flush()
                     }
-                } catch (_: Exception) { }
+                } catch (_: Exception) {}
             }.start()
 
-            // Поток 2: Remote → Telegram (дешифруем XOR)
+            // Remote → Telegram (дешифруем)
             Thread {
+                val buffer = ByteArray(16384)
                 try {
-                    val buffer = ByteArray(16384)
-                    var bytesRead: Int
-                    val input = remote!!.getInputStream()
+                    val input = remote.getInputStream()
                     val output = client.getOutputStream()
-
-                    while (isRunning && (bytesRead = input.read(buffer)) != -1) {
+                    while (isRunning) {
+                        val bytesRead = input.read(buffer)
+                        if (bytesRead == -1) break
                         xorInPlace(buffer, bytesRead, key)
                         output.write(buffer, 0, bytesRead)
                         output.flush()
                     }
-                } catch (_: Exception) { }
+                } catch (_: Exception) {}
             }.start()
 
         } catch (e: Exception) {
@@ -134,42 +148,39 @@ class ProxyService : Service() {
     private fun createNotification(): Notification {
         val channelId = CHANNEL_ID
 
+        // Создаём канал для Android 8.0+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 channelId,
                 "Шифрующий прокси",
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Прокси активно шифрует трафик Telegram"
+                description = "Прокси шифрует трафик Telegram через XOR"
                 setShowBadge(false)
             }
             getSystemService(NotificationManager::class.java)?.createNotificationChannel(channel)
         }
 
-        // Intent для остановки по кнопке в уведомлении
-        val stopIntent = Intent(this, ProxyService::class.java).apply {
-            action = ACTION_STOP
-        }
+        val stopIntent = Intent(this, ProxyService::class.java).apply { action = ACTION_STOP }
         val stopPendingIntent = PendingIntent.getService(
-            this,
-            0,
-            stopIntent,
+            this, 0, stopIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
         val localPort = prefs.getString("local_port", "1080")
+        val remoteHost = prefs.getString("remote_host", "—")
 
-        return Notification.Builder(this, channelId)
+        return NotificationCompat.Builder(this, channelId)
             .setContentTitle("Шифрующий прокси активен")
-            .setContentText("127.0.0.1:$localPort → зашифровано на удалённый сервер")
+            .setContentText("127.0.0.1:$localPort → XOR → $remoteHost")
             .setSmallIcon(R.drawable.ic_proxy_active)
             .setLargeIcon(BitmapFactory.decodeResource(resources, R.drawable.ic_proxy_active))
-            .setOngoing(true)                    // нельзя смахнуть
-            .setPriority(Notification.PRIORITY_LOW)
-            .setCategory(Notification.CATEGORY_SERVICE)
+            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .addAction(
                 android.R.drawable.ic_menu_close_clear_cancel,
-                "Остановить прокси",
+                "Остановить",
                 stopPendingIntent
             )
             .build()
@@ -177,9 +188,7 @@ class ProxyService : Service() {
 
     override fun onDestroy() {
         isRunning = false
-        try {
-            serverSocket?.close()
-        } catch (_: Exception) {}
+        try { serverSocket?.close() } catch (_: Exception) {}
         executor.shutdownNow()
         stopForeground(true)
         Log.i(TAG, "ProxyService остановлен")
