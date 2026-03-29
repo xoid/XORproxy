@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="192" height="192" viewBox="0 0 192 192" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- Фон - тёмно-синий круг -->
+    <circle cx="96" cy="96" r="88" fill="#1E3A8A"/>
+
+    <!-- Основной щит/замок (синий) -->
+    <path d="M96 48 L64 68 L64 104 C64 128 78 148 96 156 C114 148 128 128 128 104 L128 68 L96 48 Z"
+        fill="#3B82F6" stroke="#1E40AF" stroke-width="12"/>
+
+    <!-- Подсветка щита сверху -->
+    <path d="M96 48 L64 68 L64 80 L128 80 L128 68 L96 48 Z" fill="#60A5FA"/>
+
+    <!-- Замочная скважина -->
+    <circle cx="96" cy="98" r="12" fill="#1E3A8A"/>
+    <rect x="92" y="98" width="8" height="18" rx="2" fill="#1E3A8A"/>
+
+    <!-- Зелёные стрелки шифрования (входящий/исходящий трафик) -->
+    <!-- Левая сторона (выходящий зашифрованный) -->
+    <path d="M50 75 Q65 65 75 75" fill="none" stroke="#22C55E" stroke-width="8" stroke-linecap="round"/>
+    <path d="M50 105 Q65 115 75 105" fill="none" stroke="#22C55E" stroke-width="8" stroke-linecap="round"/>
+
+    <!-- Правая сторона (входящий расшифрованный) -->
+    <path d="M117 75 Q130 65 145 75" fill="none" stroke="#22C55E" stroke-width="8" stroke-linecap="round"/>
+    <path d="M117 105 Q130 115 145 105" fill="none" stroke="#22C55E" stroke-width="8" stroke-linecap="round"/>
+
+    <!-- Маленький замочек в центре -->
+    <rect x="82" y="115" width="28" height="22" rx="4" fill="#1E40AF"/>
+    <circle cx="96" cy="118" r="6" fill="#EFF6FF"/>
+</svg>
